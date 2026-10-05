@@ -1,0 +1,6 @@
+{
+  "name": "SyncSheet CNIC & CV Hub",
+  "description": "Real-time Google Sheet sync, offline customer manager with CNIC auto-lookup, smart deduplication, and instant CV PDF export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
