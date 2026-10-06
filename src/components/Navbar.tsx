@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   CheckCircle2,
+  Zap,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -53,6 +54,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const navItems = [
     { id: 'form', label: 'CNIC Entry & Form', icon: PlusCircle },
+    { id: 'autofill', label: 'Universal AutoFiller', icon: Zap },
     { id: 'customers', label: 'Customer Directory', icon: Users },
     { id: 'cv-maker', label: 'CV Builder & PDF', icon: FileText },
     { id: 'analytics', label: 'Reports & Analytics', icon: BarChart3 },

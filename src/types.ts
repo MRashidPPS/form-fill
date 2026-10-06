@@ -43,4 +43,12 @@ export interface SheetMetadata {
   lastSyncedAt?: string;
 }
 
-export type ActiveTab = 'form' | 'customers' | 'cv-maker' | 'analytics' | 'sync-settings';
+export interface DetectedField {
+  key: string;
+  label: string;
+  value: string;
+  type: string;
+  isNew: boolean;
+}
+
+export type ActiveTab = 'form' | 'customers' | 'cv-maker' | 'analytics' | 'autofill' | 'sync-settings';

@@ -37,6 +37,7 @@ import { CustomerPreviewModal } from './components/CustomerPreviewModal';
 import { CVPreviewModal } from './components/CVPreviewModal';
 import { SheetSettingsModal } from './components/SheetSettingsModal';
 import { StatsCards } from './components/StatsCards';
+import { AutofillHub } from './components/AutofillHub';
 import {
   PlusCircle,
   Users,
@@ -50,6 +51,7 @@ import {
   Download,
   Info,
   Layers,
+  Zap,
 } from 'lucide-react';
 import { downloadCustomerCVPdf } from './services/cvGenerator';
 
@@ -398,6 +400,110 @@ export default function App() {
     }
   };
 
+  // Save new dynamically detected fields from web forms into Google Sheet under CNIC
+  const handleSaveNewFieldsToCustomer = async (
+    cnic: string,
+    newFields: Record<string, string>
+  ) => {
+    const norm = normalizeCnic(cnic);
+    const existing = customers.find((c) => normalizeCnic(c.cnic) === norm);
+    if (!existing) {
+      throw new Error(`Customer with CNIC ${cnic} not found in database.`);
+    }
+
+    const updatedCustomer: Customer = {
+      ...existing,
+      customFields: {
+        ...(existing.customFields || {}),
+        ...newFields,
+      },
+      updatedAt: new Date().toISOString(),
+      syncedToSheet: false,
+    };
+
+    upsertCustomerLocally(updatedCustomer, true);
+    const updatedList = getStoredCustomers();
+    setCustomers(updatedList);
+    setPendingQueueCount(getSyncQueue().length);
+
+    // If online & Google Sheets connected, push immediately!
+    const token = accessToken || (await getAccessToken());
+    if (isOnline && token && sheetConfig) {
+      try {
+        const res = await syncCustomerWithSheet(
+          token,
+          sheetConfig.id,
+          sheetConfig.sheetName,
+          updatedCustomer
+        );
+        const idx = updatedList.findIndex(
+          (c) => normalizeCnic(c.cnic) === norm
+        );
+        if (idx >= 0) {
+          updatedList[idx].syncedToSheet = true;
+          updatedList[idx].sheetRowIndex = res.rowIndex;
+          saveStoredCustomers(updatedList);
+          setCustomers([...updatedList]);
+        }
+        showToast(
+          `Google Sheet updated! ${Object.keys(newFields).length} new field column(s) appended under CNIC ${cnic}.`,
+          'success'
+        );
+      } catch (err: any) {
+        showToast(`Saved locally. Sheet sync will retry: ${err.message}`, 'info');
+      }
+    } else {
+      showToast(
+        `Saved ${Object.keys(newFields).length} new field(s) locally under CNIC ${cnic}!`,
+        'success'
+      );
+    }
+  };
+
+  // Check for any new fields harvested from external website bookmarklets via localStorage or window message
+  useEffect(() => {
+    const processHarvestQueue = async () => {
+      try {
+        const raw = localStorage.getItem('syncsheet_web_harvest_queue');
+        if (!raw) return;
+        const queue: Array<{ cnic: string; newFields: Record<string, string> }> = JSON.parse(raw);
+        if (queue.length === 0) return;
+
+        for (const item of queue) {
+          if (item.cnic && item.newFields && Object.keys(item.newFields).length > 0) {
+            await handleSaveNewFieldsToCustomer(item.cnic, item.newFields);
+          }
+        }
+        localStorage.removeItem('syncsheet_web_harvest_queue');
+      } catch (e) {
+        console.warn('Harvest queue error:', e);
+      }
+    };
+
+    processHarvestQueue();
+
+    const handleWindowFocus = () => {
+      processHarvestQueue();
+    };
+
+    const handlePostMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'SYNCSHEET_NEW_FIELDS' && e.data.payload) {
+        const { cnic, newFields } = e.data.payload;
+        if (cnic && newFields) {
+          handleSaveNewFieldsToCustomer(cnic, newFields);
+        }
+      }
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+    window.addEventListener('message', handlePostMessage);
+
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+      window.removeEventListener('message', handlePostMessage);
+    };
+  }, [customers, accessToken, sheetConfig, isOnline]);
+
   // Delete customer locally
   const handleDeleteCustomer = (cnic: string) => {
     deleteCustomerLocally(cnic);
@@ -559,6 +665,14 @@ export default function App() {
             }`}
           >
             Entry Form
+          </button>
+          <button
+            onClick={() => setActiveTab('autofill')}
+            className={`flex-1 min-w-[90px] py-2 rounded-lg text-center ${
+              activeTab === 'autofill' ? 'bg-slate-900 text-white' : 'text-slate-600'
+            }`}
+          >
+            AutoFiller ⚡
           </button>
           <button
             onClick={() => setActiveTab('customers')}
@@ -770,6 +884,17 @@ export default function App() {
               onExportCsv={handleExportCsv}
             />
           </div>
+        )}
+
+        {/* Tab 5: Universal Form AutoFiller & Web Field Collector */}
+        {activeTab === 'autofill' && (
+          <AutofillHub
+            customers={customers}
+            sheetConfig={sheetConfig}
+            onSaveNewFieldsToCustomer={handleSaveNewFieldsToCustomer}
+            isOnline={isOnline}
+            isSignedIn={Boolean(user)}
+          />
         )}
       </main>
 
