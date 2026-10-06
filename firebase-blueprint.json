@@ -1,0 +1,28 @@
+{
+  "entities": {
+    "customer": {
+      "title": "Customer",
+      "description": "Customer registry record indexed by CNIC",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "cnic": { "type": "string" },
+        "fullName": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "city": { "type": "string" },
+        "qualification": { "type": "string" },
+        "profession": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["cnic", "fullName"]
+    }
+  },
+  "firestore": {
+    "/customers/{customerId}": {
+      "schema": "customer",
+      "description": "Collection of customer records"
+    }
+  }
+}

@@ -49,7 +49,10 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
 
   const handleCreateNew = async () => {
     if (!isSignedIn) {
-      alert('Please sign in with Google first to create a Google Sheet in your Drive.');
+      setFeedback({
+        type: 'error',
+        message: 'Please sign in with Google first to create a Google Sheet in your Drive.',
+      });
       return;
     }
     setIsProcessing(true);
@@ -66,11 +69,17 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
 
   const handleConnectExisting = async () => {
     if (!isSignedIn) {
-      alert('Please sign in with Google first to access your Google Sheets.');
+      setFeedback({
+        type: 'error',
+        message: 'Please sign in with Google first to access your Google Sheets.',
+      });
       return;
     }
     if (!existingInput.trim()) {
-      alert('Please enter a Google Sheet ID or URL');
+      setFeedback({
+        type: 'error',
+        message: 'Please enter a Google Sheet ID or URL',
+      });
       return;
     }
     setIsProcessing(true);

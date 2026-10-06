@@ -11,6 +11,7 @@ import {
   logout,
   getAccessToken,
   setCachedAccessToken,
+  formatAuthError,
 } from './lib/firebase';
 import { Customer, SheetMetadata, ActiveTab } from './types';
 import {
@@ -52,6 +53,7 @@ import {
   Info,
   Layers,
   Zap,
+  ExternalLink,
 } from 'lucide-react';
 import { downloadCustomerCVPdf } from './services/cvGenerator';
 
@@ -84,6 +86,7 @@ export default function App() {
   const [isCVModalOpen, setIsCVModalOpen] = useState<boolean>(false);
 
   const [isSheetModalOpen, setIsSheetModalOpen] = useState<boolean>(false);
+  const [authErrorModal, setAuthErrorModal] = useState<{ title: string; message: string; isPopupBlocked?: boolean } | null>(null);
 
   // Toast notifications
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(
@@ -134,8 +137,13 @@ export default function App() {
         setAccessToken(token);
         setNeedsAuth(false);
       },
+      (u) => {
+        // User profile recognized from Firebase session
+        setUser(u);
+        setNeedsAuth(false);
+      },
       () => {
-        // If not authenticated or token lost
+        setUser(null);
         setNeedsAuth(true);
       }
     );
@@ -145,6 +153,7 @@ export default function App() {
   // Google Login Handler
   const handleGoogleLogin = async () => {
     setIsLoggingIn(true);
+    setAuthErrorModal(null);
     try {
       const res = await googleSignIn();
       if (res) {
@@ -161,7 +170,18 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Login error:', err);
-      showToast(err.message || 'Failed to sign in with Google', 'error');
+      const friendlyMsg = formatAuthError(err);
+      const isBlocked = err?.code === 'auth/popup-blocked';
+
+      if (isBlocked) {
+        setAuthErrorModal({
+          title: 'Google Sign-In Popup Blocked',
+          message: 'Your browser or iframe preview blocked the Google Sign-In popup window. To complete sign-in, please allow popups in your browser or open this app directly in a full browser tab.',
+          isPopupBlocked: true,
+        });
+      } else if (err?.code !== 'auth/popup-closed-by-user') {
+        showToast(friendlyMsg, 'error');
+      }
     } finally {
       setIsLoggingIn(false);
     }
@@ -527,7 +547,7 @@ export default function App() {
   // Export full dataset as CSV
   const handleExportCsv = () => {
     if (customers.length === 0) {
-      alert('No customer records to export.');
+      showToast('No customer records to export yet.', 'info');
       return;
     }
 
@@ -630,6 +650,36 @@ export default function App() {
               <Info className="w-5 h-5 text-blue-400 shrink-0" />
             )}
             <span>{toast.message}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Google Sign In status helper if not logged in */}
+      {!user && (
+        <div className="bg-gradient-to-r from-emerald-800 via-teal-900 to-slate-900 text-white px-4 py-3 shadow-xs border-b border-emerald-700/50">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs sm:text-sm">
+            <div className="flex items-center space-x-2.5">
+              <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 shrink-0">
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12.545,10.239v3.821h5.445c-0.712,2.315-2.647,3.972-5.445,3.972c-3.332,0-6.033-2.701-6.033-6.032s2.701-6.032,6.033-6.032c1.498,0,2.866,0.549,3.921,1.453l2.814-2.814C17.503,2.988,15.139,2,12.545,2C7.021,2,2.543,6.477,2.543,12s4.478,10,10.002,10c8.396,0,10.249-7.85,9.426-11.748L12.545,10.239z"/>
+                </svg>
+              </div>
+              <div>
+                <span className="font-bold">Google Account Sign-In: </span>
+                <span className="text-emerald-100">
+                  Connect your Google account to enable real-time automatic sync with your Google Sheet. Customer entries and offline auto-lookup work immediately.
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2 shrink-0">
+              <button
+                onClick={handleGoogleLogin}
+                disabled={isLoggingIn}
+                className="px-3.5 py-1.5 bg-white text-slate-900 font-bold rounded-lg hover:bg-slate-100 text-xs shadow-xs transition-colors flex items-center space-x-1.5"
+              >
+                <span>{isLoggingIn ? 'Signing In...' : 'Sign in with Google'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -933,6 +983,66 @@ export default function App() {
         onPushToSheet={handlePushAllToSheet}
         pendingQueueCount={pendingQueueCount}
       />
+
+      {/* Auth Error / Popup Blocked Help Modal */}
+      {authErrorModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="p-6 space-y-4">
+              <div className="flex items-center space-x-3 text-amber-600">
+                <div className="p-2 bg-amber-100 rounded-xl">
+                  <AlertCircle className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900">
+                  {authErrorModal.title}
+                </h3>
+              </div>
+
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                {authErrorModal.message}
+              </p>
+
+              {authErrorModal.isPopupBlocked && (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2">
+                  <p className="font-semibold text-slate-800">
+                    Why did this happen?
+                  </p>
+                  <p className="text-slate-600">
+                    Embedded preview windows in browsers sometimes restrict Google OAuth popups. Opening in a direct browser tab resolves this immediately.
+                  </p>
+                  <a
+                    href={window.location.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center space-x-1.5 font-bold text-blue-600 hover:text-blue-800 hover:underline pt-1"
+                  >
+                    <span>Open App in Full Browser Tab</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  onClick={() => setAuthErrorModal(null)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() => {
+                    setAuthErrorModal(null);
+                    handleGoogleLogin();
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold"
+                >
+                  Retry Sign In
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

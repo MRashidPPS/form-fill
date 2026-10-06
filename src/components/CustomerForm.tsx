@@ -62,6 +62,7 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
   const [lookupMatch, setLookupMatch] = useState<Customer | null>(null);
   const [hasAutoPopulated, setHasAutoPopulated] = useState(false);
   const [highlightPopulated, setHighlightPopulated] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Load initialCustomer if passed from parent
   useEffect(() => {
@@ -110,6 +111,7 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
   const handleCnicChange = (val: string) => {
     const formatted = formatCnic(val);
     setCnic(formatted);
+    setFormError(null);
 
     const norm = normalizeCnic(formatted);
     if (norm.length >= 5) {
@@ -136,7 +138,7 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
 
     // Check duplicate key
     if (customFieldEntries.some((e) => e.key.toLowerCase() === trimmedKey.toLowerCase())) {
-      alert(`Field "${trimmedKey}" already exists.`);
+      setFormError(`Field "${trimmedKey}" already exists.`);
       return;
     }
 
@@ -174,6 +176,7 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
     setCustomFieldEntries([]);
     setLookupMatch(null);
     setHasAutoPopulated(false);
+    setFormError(null);
   };
 
   const buildCustomerObject = (): Customer => {
@@ -214,14 +217,15 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!cnic.trim()) {
-      alert('Please enter a valid CNIC / National ID');
+      setFormError('Please enter a valid CNIC / National ID');
       return;
     }
     if (!fullName.trim()) {
-      alert('Please enter the customer full name');
+      setFormError('Please enter the customer full name');
       return;
     }
 
+    setFormError(null);
     const customerObj = buildCustomerObject();
     const isUpdate = Boolean(lookupMatch);
     onPreviewAndSubmit(customerObj, isUpdate);
@@ -229,9 +233,10 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
 
   const handleTriggerQuickCV = () => {
     if (!fullName.trim() || !cnic.trim()) {
-      alert('Please enter at least CNIC and Full Name to generate a CV preview.');
+      setFormError('Please enter at least CNIC and Full Name to generate a CV preview.');
       return;
     }
+    setFormError(null);
     const customerObj = buildCustomerObject();
     onQuickCV(customerObj);
   };
@@ -275,6 +280,13 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
       </div>
 
       {/* Auto-populate Banner */}
+      {formError && (
+        <div className="bg-rose-50 border-b border-rose-200 p-3 sm:px-6 flex items-center space-x-3 text-rose-900 text-xs font-semibold">
+          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          <span>{formError}</span>
+        </div>
+      )}
+
       {lookupMatch ? (
         <div className="bg-emerald-50 border-b border-emerald-200 p-4 flex items-start sm:items-center space-x-3 text-emerald-900 transition-all">
           <div className="p-1 rounded-full bg-emerald-200 text-emerald-800 shrink-0 mt-0.5 sm:mt-0">

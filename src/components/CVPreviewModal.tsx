@@ -30,16 +30,18 @@ export const CVPreviewModal: React.FC<CVPreviewModalProps> = ({
 }) => {
   const [selectedTheme, setSelectedTheme] = useState<keyof typeof CV_THEMES>('modernNavy');
   const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   if (!isOpen || !customer) return null;
 
   const handleDownload = () => {
     setIsDownloading(true);
+    setDownloadError(null);
     try {
       downloadCustomerCVPdf(customer, selectedTheme);
     } catch (err) {
       console.error('Error generating PDF CV:', err);
-      alert('Failed to generate PDF. Please try again.');
+      setDownloadError('Failed to generate PDF. Please try again.');
     } finally {
       setIsDownloading(false);
     }

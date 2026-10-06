@@ -52,6 +52,7 @@ export const AutofillHub: React.FC<AutofillHubProps> = ({
   const [detectedNewFields, setDetectedNewFields] = useState<Record<string, string>>({});
   const [isSavingFields, setIsSavingFields] = useState(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+  const [hubError, setHubError] = useState<string | null>(null);
   const [copiedBookmarklet, setCopiedBookmarklet] = useState(false);
   const [activeSubTab, setActiveSubTab] = useState<'simulator' | 'bookmarklet' | 'extension'>('simulator');
 
@@ -74,6 +75,7 @@ export const AutofillHub: React.FC<AutofillHubProps> = ({
   // Handle CNIC input inside the form simulator
   const handleSimulatorCnicChange = (val: string) => {
     setSimulatorCnic(val);
+    setHubError(null);
     const norm = normalizeCnic(val);
     if (norm.length >= 5) {
       const match = customers.find((c) => normalizeCnic(c.cnic) === norm);
@@ -116,16 +118,17 @@ export const AutofillHub: React.FC<AutofillHubProps> = ({
     const norm = normalizeCnic(simulatorCnic);
     const activeCustomer = customers.find((c) => normalizeCnic(c.cnic) === norm);
     if (!activeCustomer) {
-      alert('Please enter a valid CNIC to associate new fields with a customer.');
+      setHubError('Please enter a valid CNIC to associate new fields with a customer.');
       return;
     }
 
     if (Object.keys(detectedNewFields).length === 0) {
-      alert('No new fields with values detected. Fill in the extra fields first.');
+      setHubError('No new fields with values detected. Fill in the extra fields first.');
       return;
     }
 
     setIsSavingFields(true);
+    setHubError(null);
     try {
       await onSaveNewFieldsToCustomer(activeCustomer.cnic, detectedNewFields);
       setSaveSuccessMessage(
@@ -134,7 +137,7 @@ export const AutofillHub: React.FC<AutofillHubProps> = ({
       setDetectedNewFields({});
       setTimeout(() => setSaveSuccessMessage(null), 5000);
     } catch (err: any) {
-      alert(`Error saving fields: ${err.message || 'Unknown error'}`);
+      setHubError(`Error saving fields: ${err.message || 'Unknown error'}`);
     } finally {
       setIsSavingFields(false);
     }
@@ -365,6 +368,14 @@ export const AutofillHub: React.FC<AutofillHubProps> = ({
             <div className="p-4 bg-emerald-600 text-white rounded-xl shadow-md flex items-center space-x-3 text-xs sm:text-sm font-semibold animate-in fade-in">
               <CheckCircle2 className="w-5 h-5 shrink-0" />
               <span>{saveSuccessMessage}</span>
+            </div>
+          )}
+
+          {/* Error notification */}
+          {hubError && (
+            <div className="p-4 bg-rose-600 text-white rounded-xl shadow-md flex items-center space-x-3 text-xs sm:text-sm font-semibold animate-in fade-in">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <span>{hubError}</span>
             </div>
           )}
 
@@ -856,12 +867,10 @@ export const AutofillHub: React.FC<AutofillHubProps> = ({
                 href={bookmarkletCode}
                 onClick={(e) => {
                   e.preventDefault();
-                  alert(
-                    'To use on ANY website: Drag this green button to your browser Bookmarks bar! Then on any web form, click it in your bookmarks.'
-                  );
+                  handleCopyBookmarklet();
                 }}
                 className="cursor-grab active:cursor-grabbing px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-sm shadow-md flex items-center space-x-2 select-none"
-                title="Drag to Bookmarks bar"
+                title="Drag to Bookmarks bar (or click to copy)"
               >
                 <Zap className="w-4 h-4 fill-current text-yellow-300" />
                 <span>⚡ SyncSheet AutoFiller</span>
