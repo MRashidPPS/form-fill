@@ -21,6 +21,7 @@ interface CustomerFormProps {
   allCustomers: Customer[];
   onPreviewAndSubmit: (customer: Customer, isUpdate: boolean) => void;
   onQuickCV: (customer: Customer) => void;
+  onOpenCVUpload?: () => void;
   isOnline: boolean;
   hasGoogleSheet: boolean;
 }
@@ -30,6 +31,7 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
   allCustomers,
   onPreviewAndSubmit,
   onQuickCV,
+  onOpenCVUpload,
   isOnline,
   hasGoogleSheet,
 }) => {
@@ -152,6 +154,49 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
     setCustomFieldEntries(customFieldEntries.filter((_, idx) => idx !== index));
   };
 
+  const handleApplyPresetTemplate = (templateName: 'police' | 'cfc' | 'vehicle') => {
+    let fieldsToAdd: string[] = [];
+    if (templateName === 'police') {
+      fieldsToAdd = [
+        'Police Station (تھانہ)',
+        'Mother Name (والدہ کا نام)',
+        'Blood Group',
+        'Driving License No',
+        'Emergency Contact (وارث رابطہ)',
+        'District (ضلع)',
+        'Tehsil (تحصیل)',
+        'Marital Status'
+      ];
+    } else if (templateName === 'cfc') {
+      fieldsToAdd = [
+        'Domicile District',
+        'Religion',
+        'Postal Code',
+        'Mother CNIC',
+        'Nationality'
+      ];
+    } else if (templateName === 'vehicle') {
+      fieldsToAdd = [
+        'Vehicle Reg No',
+        'Engine No',
+        'Chassis No',
+        'Driving License No',
+        'Token Tax Status'
+      ];
+    }
+
+    const existingKeys = new Set(customFieldEntries.map((e) => e.key.toLowerCase()));
+    const newEntries = [...customFieldEntries];
+
+    fieldsToAdd.forEach((k) => {
+      if (!existingKeys.has(k.toLowerCase())) {
+        newEntries.push({ key: k, value: '' });
+      }
+    });
+
+    setCustomFieldEntries(newEntries);
+  };
+
   const handleCustomFieldValueChange = (index: number, val: string) => {
     const updated = [...customFieldEntries];
     updated[index].value = val;
@@ -259,7 +304,17 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center space-x-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {onOpenCVUpload && (
+            <button
+              type="button"
+              onClick={onOpenCVUpload}
+              className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-linear-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-slate-950 shadow-md transition-all cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>📄 Upload CV (AI Collect)</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={handleReset}
@@ -554,7 +609,7 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
 
         {/* Section 3: Dynamic Custom Fields (Appended Columns) */}
         <div className="pt-2 border-t border-slate-200">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
                 <span>3. Dynamic Custom Fields</span>
@@ -563,16 +618,35 @@ export const CustomerForm: React.FC<CustomerFormProps> = ({
                 </span>
               </h3>
             </div>
-            {!showAddCustom && (
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => setShowAddCustom(true)}
-                className="inline-flex items-center space-x-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-md transition-colors"
+                onClick={() => handleApplyPresetTemplate('police')}
+                className="inline-flex items-center space-x-1 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-md transition-colors border border-blue-200"
+                title="Add Police Sahulat Markaz fields: Police Station (Thana), Mother Name, Blood Group, License No, Emergency Contact, etc."
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Custom Field</span>
+                <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                <span>+ Police Sahulat Markaz Preset</span>
               </button>
-            )}
+              <button
+                type="button"
+                onClick={() => handleApplyPresetTemplate('cfc')}
+                className="inline-flex items-center space-x-1 text-[11px] font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-md transition-colors border border-amber-200"
+                title="Add CFC Citizen Facilitation fields: Domicile, Religion, Postal Code, etc."
+              >
+                <span>+ CFC Preset</span>
+              </button>
+              {!showAddCustom && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddCustom(true)}
+                  className="inline-flex items-center space-x-1 text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-md transition-colors border border-emerald-200"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Custom Field</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Add custom field popover */}

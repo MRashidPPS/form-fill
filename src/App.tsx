@@ -30,7 +30,16 @@ import {
   fetchSheetData,
   syncCustomerWithSheet,
   normalizeCnic,
+  formatCnic,
 } from './services/sheetsService';
+import {
+  subscribeUserCustomers,
+  saveCustomerToCloud,
+  deleteCustomerFromCloud,
+  saveSheetConfigToCloud,
+  loadSheetConfigFromCloud,
+  uploadLocalCustomersToCloud,
+} from './services/firestoreService';
 import { Navbar } from './components/Navbar';
 import { CustomerForm } from './components/CustomerForm';
 import { CustomerTable } from './components/CustomerTable';
@@ -39,6 +48,10 @@ import { CVPreviewModal } from './components/CVPreviewModal';
 import { SheetSettingsModal } from './components/SheetSettingsModal';
 import { StatsCards } from './components/StatsCards';
 import { AutofillHub } from './components/AutofillHub';
+import { FloatingAutofillButton } from './components/FloatingAutofillButton';
+import { CVUploadModal } from './components/CVUploadModal';
+import { JobsSearchHub } from './components/JobsSearchHub';
+import { JobListing } from './types';
 import {
   PlusCircle,
   Users,
@@ -54,6 +67,7 @@ import {
   Layers,
   Zap,
   ExternalLink,
+  Briefcase,
 } from 'lucide-react';
 import { downloadCustomerCVPdf } from './services/cvGenerator';
 
@@ -88,6 +102,10 @@ export default function App() {
   const [isSheetModalOpen, setIsSheetModalOpen] = useState<boolean>(false);
   const [authErrorModal, setAuthErrorModal] = useState<{ title: string; message: string; isPopupBlocked?: boolean } | null>(null);
 
+  // AI CV Upload and Job Search state
+  const [isCVUploadModalOpen, setIsCVUploadModalOpen] = useState<boolean>(false);
+  const [jobCandidate, setJobCandidate] = useState<Customer | null>(null);
+
   // Toast notifications
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(
     null
@@ -105,7 +123,8 @@ export default function App() {
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      showToast('Network restored. You are back online.', 'info');
+      showToast('Network restored. Auto-syncing pending records...', 'info');
+      setTimeout(() => triggerSync(undefined, true), 1000);
     };
     const handleOffline = () => {
       setIsOnline(false);
@@ -136,6 +155,10 @@ export default function App() {
         setUser(u);
         setAccessToken(token);
         setNeedsAuth(false);
+        // Auto-sync pending records immediately on load
+        setTimeout(() => {
+          triggerSync(token, true);
+        }, 800);
       },
       (u) => {
         // User profile recognized from Firebase session
@@ -162,11 +185,10 @@ export default function App() {
         setNeedsAuth(false);
         showToast(`Connected as ${res.user.displayName || res.user.email}`);
 
-        // If sheet config already exists, prompt sync
-        const config = getStoredSheetConfig();
-        if (config) {
-          triggerSync(res.accessToken);
-        }
+        // Automatically ensure Google Sheet exists and auto-sync all pending records!
+        setTimeout(() => {
+          triggerSync(res.accessToken, true);
+        }, 500);
       }
     } catch (err: any) {
       console.error('Login error:', err);
@@ -199,43 +221,147 @@ export default function App() {
     }
   };
 
-  // Trigger sync of pending queue or full sheet check
-  const triggerSync = async (overrideToken?: string) => {
-    const token = overrideToken || accessToken || (await getAccessToken());
-    if (!token) {
-      showToast('Please sign in with Google to sync with Google Sheet', 'info');
-      handleGoogleLogin();
-      return;
+  // Cross-Device Real-Time Cloud Sync with Gmail Account via Firestore
+  useEffect(() => {
+    if (!user) return;
+
+    // 1. Sync any existing local offline records to Cloud Firestore
+    const local = getStoredCustomers();
+    if (local.length > 0) {
+      uploadLocalCustomersToCloud(user.uid, user.email || '', local);
     }
 
-    const config = sheetConfig || getStoredSheetConfig();
-    if (!config) {
-      setIsSheetModalOpen(true);
-      showToast('Please select or create a Google Sheet first', 'info');
+    // 2. Load cloud sheet config if local is unset
+    loadSheetConfigFromCloud(user.uid).then((cloudConfig) => {
+      if (cloudConfig && !sheetConfig) {
+        setSheetConfig(cloudConfig);
+        saveStoredSheetConfig(cloudConfig);
+      }
+    });
+
+    // 3. Real-time Firestore subscription: updates on phone reflect on laptop and vice versa!
+    const unsubscribe = subscribeUserCustomers(user.uid, (cloudCustomers) => {
+      if (cloudCustomers.length > 0) {
+        const currentLocal = getStoredCustomers();
+        const mergedMap = new Map<string, Customer>();
+
+        currentLocal.forEach((c) => mergedMap.set(normalizeCnic(c.cnic), c));
+        cloudCustomers.forEach((cc) => {
+          const norm = normalizeCnic(cc.cnic);
+          const existing = mergedMap.get(norm);
+          if (existing) {
+            mergedMap.set(norm, {
+              ...existing,
+              ...cc,
+              customFields: {
+                ...(existing.customFields || {}),
+                ...(cc.customFields || {}),
+              },
+            });
+          } else {
+            mergedMap.set(norm, cc);
+          }
+        });
+
+        const mergedList = Array.from(mergedMap.values());
+        saveStoredCustomers(mergedList);
+        setCustomers(mergedList);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // Automatically ensures a Google Sheet is linked, or creates a default one if none exists
+  const ensureSheetConfig = async (token: string): Promise<SheetMetadata> => {
+    let config = sheetConfig || getStoredSheetConfig();
+    if (!config?.id) {
+      showToast('Setting up your Google Sheet in Google Drive...', 'info');
+      const created = await createSpreadsheet(token, 'Customer Database & CNIC Registry');
+      config = {
+        ...created,
+        lastSyncedAt: new Date().toISOString(),
+      };
+      saveStoredSheetConfig(config);
+      setSheetConfig(config);
+      showToast(`Created & Linked Google Sheet "${config.title}"!`, 'success');
+    }
+    return config;
+  };
+
+  // Trigger sync of pending queue or full sheet check (supports automatic background run)
+  const triggerSync = async (overrideToken?: string, isAuto = false) => {
+    if (isSyncing) return;
+    const token = overrideToken || accessToken || (await getAccessToken());
+    if (!token) {
+      if (!isAuto) {
+        showToast('Please sign in with Google to sync with Google Sheet', 'info');
+        handleGoogleLogin();
+      }
       return;
     }
 
     setIsSyncing(true);
     try {
+      // 1. Ensure Google Sheet exists automatically!
+      const config = await ensureSheetConfig(token);
+
+      // 2. Automatically pull any existing rows from Google Sheet if local cache is empty
+      const currentLocal = getStoredCustomers();
+      if (currentLocal.length === 0) {
+        try {
+          await handlePullFromSheet(config);
+        } catch (pullErr) {
+          console.warn('Auto pull from sheet error:', pullErr);
+        }
+      }
+
+      // 3. Flush pending queue to the sheet!
       const { successCount, errors } = await flushSyncQueue(token);
-      setCustomers(getStoredCustomers());
+      const updatedCustomers = getStoredCustomers();
+      setCustomers(updatedCustomers);
       setPendingQueueCount(getSyncQueue().length);
       setSheetConfig(getStoredSheetConfig());
 
-      if (errors.length > 0) {
-        showToast(`Synced ${successCount} record(s). Errors: ${errors.join(', ')}`, 'error');
-      } else if (successCount > 0) {
-        showToast(`Successfully synchronized ${successCount} record(s) with Google Sheet!`, 'success');
-      } else {
+      if (successCount > 0) {
+        showToast(
+          `✓ Auto-synced ${successCount} record(s) to Google Sheet "${config.title}"!`,
+          'success'
+        );
+      } else if (!isAuto) {
         showToast('All customer records are up to date with Google Sheet.', 'info');
       }
     } catch (err: any) {
-      console.error('Sync failure:', err);
-      showToast(err.message || 'Sync failed', 'error');
+      console.error('Auto-sync error:', err);
+      if (!isAuto) {
+        showToast(err.message || 'Sync failed', 'error');
+      }
     } finally {
       setIsSyncing(false);
     }
   };
+
+  // Background Auto-Sync effect: watches pending queue and automatically flushes to Google Sheet
+  useEffect(() => {
+    if (!isOnline || !user || isSyncing) return;
+    const queue = getSyncQueue();
+    if (queue.length > 0) {
+      const timer = setTimeout(() => {
+        triggerSync(undefined, true);
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+  }, [pendingQueueCount, isOnline, user, accessToken, sheetConfig]);
+
+  // Periodic heartbeat: checks every 15s for any pending items and silently auto-syncs
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (isOnline && (user || accessToken) && getSyncQueue().length > 0) {
+        triggerSync(undefined, true);
+      }
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [isOnline, user, accessToken, sheetConfig]);
 
   // Create New Spreadsheet via Google Sheets API
   const handleCreateNewSheet = async (title: string) => {
@@ -375,18 +501,24 @@ export default function App() {
     setPendingQueueCount(getSyncQueue().length);
     setCustomerToEdit(null);
 
-    showToast(`Saved customer ${saved.fullName} (${saved.cnic}) locally`, 'success');
+    // Save to Cloud Firestore for cross-device sync across all connected devices
+    if (user) {
+      saveCustomerToCloud(user.uid, user.email || '', saved);
+    }
 
-    // 2. If online and Google Auth is active + sheetConfig exists, sync immediately
-    if (isOnline && (accessToken || user) && sheetConfig) {
+    showToast(`Saved customer ${saved.fullName} (${saved.cnic}) locally & cloud-synced`, 'success');
+
+    // 2. If online and Google Auth is active, immediately auto-sync to Google Sheet!
+    if (isOnline && (accessToken || user)) {
       const token = accessToken || (await getAccessToken());
       if (token) {
         setIsSyncing(true);
         try {
+          const config = await ensureSheetConfig(token);
           const res = await syncCustomerWithSheet(
             token,
-            sheetConfig.id,
-            sheetConfig.sheetName,
+            config.id,
+            config.sheetName,
             saved
           );
 
@@ -401,20 +533,27 @@ export default function App() {
             setCustomers([...updatedList]);
           }
 
+          // Remove from sync queue since it is now synced
+          const q = getSyncQueue().filter(
+            (item) => normalizeCnic(item.customer.cnic) !== normalizeCnic(saved.cnic)
+          );
+          localStorage.setItem('syncsheet_sync_queue_v1', JSON.stringify(q));
+          setPendingQueueCount(q.length);
+
           showToast(
-            `Google Sheet updated row #${res.rowIndex} for CNIC ${saved.cnic} (${res.action})!`,
+            `✓ Auto-synced to Google Sheet (Row #${res.rowIndex}) for CNIC ${saved.cnic}!`,
             'success'
           );
         } catch (err: any) {
-          console.warn('Real-time sync to sheet encountered an error, queued offline:', err);
-          showToast(`Saved locally. Sheet sync will retry: ${err.message}`, 'info');
+          console.warn('Real-time sync to sheet encountered an error, queued for auto-retry:', err);
+          showToast(`Saved locally. Will auto-sync in background: ${err.message}`, 'info');
         } finally {
           setIsSyncing(false);
         }
       }
     } else if (!sheetConfig) {
       showToast(
-        'Saved locally! Connect a Google Sheet to synchronize rows automatically.',
+        'Saved locally! Will auto-sync when Google Account is connected.',
         'info'
       );
     }
@@ -445,6 +584,11 @@ export default function App() {
     const updatedList = getStoredCustomers();
     setCustomers(updatedList);
     setPendingQueueCount(getSyncQueue().length);
+
+    // Save to Cloud Firestore across all user devices
+    if (user) {
+      saveCustomerToCloud(user.uid, user.email || '', updatedCustomer);
+    }
 
     // If online & Google Sheets connected, push immediately!
     const token = accessToken || (await getAccessToken());
@@ -480,9 +624,163 @@ export default function App() {
     }
   };
 
-  // Check for any new fields harvested from external website bookmarklets via localStorage or window message
+  // Save candidate extracted from AI CV parser
+  const handleSaveExtractedCustomer = async (cust: Customer, isUpdate: boolean) => {
+    upsertCustomerLocally(cust, isUpdate);
+    setCustomers((prev) => {
+      const norm = normalizeCnic(cust.cnic);
+      const idx = prev.findIndex((c) => normalizeCnic(c.cnic) === norm);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = cust;
+        return next;
+      }
+      return [cust, ...prev];
+    });
+
+    setPendingQueueCount(getSyncQueue().length);
+    showToast(`✓ Candidate "${cust.fullName}" (${cust.cnic}) saved and queued for sync!`, 'success');
+
+    // Auto-sync to sheet if online & connected
+    try {
+      const token = accessToken || (await getAccessToken());
+      if (isOnline && token && sheetConfig) {
+        await syncCustomerWithSheet(token, sheetConfig.id, sheetConfig.sheetName, cust);
+        showToast(`✓ Synced "${cust.fullName}" directly to Google Sheet!`, 'success');
+      }
+    } catch (err: any) {
+      console.warn('Background sheet sync deferred:', err);
+    }
+
+    if (user) {
+      saveCustomerToCloud(user.uid, user.email || '', cust).catch(console.error);
+    }
+  };
+
+  // Collect and Save new form data entered in website forms directly to Google Sheet before submission
+  const handleCollectAndSaveCustomer = async (
+    cust: Customer
+  ): Promise<{ success: boolean; message: string }> => {
+    try {
+      const norm = normalizeCnic(cust.cnic);
+      const isUpdate = customers.some((c) => normalizeCnic(c.cnic) === norm);
+      const saved = upsertCustomerLocally(cust, isUpdate);
+
+      setCustomers((prev) => {
+        const idx = prev.findIndex((c) => normalizeCnic(c.cnic) === norm);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = saved;
+          return next;
+        }
+        return [saved, ...prev];
+      });
+
+      setPendingQueueCount(getSyncQueue().length);
+
+      // Save to Cloud Firestore for cross-device sync
+      if (user) {
+        saveCustomerToCloud(user.uid, user.email || '', saved).catch(console.error);
+      }
+
+      // Sync immediately to Google Sheet if online and connected
+      let sheetMsg = '';
+      const token = accessToken || (await getAccessToken());
+      if (isOnline && token) {
+        try {
+          const config = await ensureSheetConfig(token);
+          const res = await syncCustomerWithSheet(token, config.id, config.sheetName, saved);
+
+          setCustomers((prev) => {
+            const idx = prev.findIndex((c) => normalizeCnic(c.cnic) === norm);
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...next[idx], syncedToSheet: true, sheetRowIndex: res.rowIndex };
+              saveStoredCustomers(next);
+              return next;
+            }
+            return prev;
+          });
+
+          sheetMsg = ` and synced to Google Sheet "${config.title}" (Row #${res.rowIndex})`;
+        } catch (sheetErr: any) {
+          console.warn('Google Sheet sync deferred:', sheetErr);
+          sheetMsg = ` (saved locally, will auto-sync to sheet: ${sheetErr.message})`;
+        }
+      } else if (!sheetConfig) {
+        sheetMsg = ' (saved locally, connects to Google Sheet on login)';
+      }
+
+      const msg = `✓ Successfully collected form data for ${saved.fullName || 'Customer'} (${saved.cnic})${sheetMsg}!`;
+      showToast(msg, 'success');
+      return { success: true, message: msg };
+    } catch (e: any) {
+      const err = e.message || 'Failed to save collected form data';
+      showToast(err, 'error');
+      return { success: false, message: err };
+    }
+  };
+
+  const handleOpenAutofillForJob = (job: JobListing, cust?: Customer | null) => {
+    if (cust) {
+      setCustomerToEdit(cust);
+    }
+    setActiveTab('autofill');
+    showToast(`Loaded ${job.title} into Universal AutoFiller!`, 'info');
+  };
+
+  // Check for any new fields or entire new customer harvested from external website forms
   useEffect(() => {
     const processHarvestQueue = async () => {
+      // 1. Check URL parameters for external bookmarklet collection
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const collectCustomerRaw = params.get('collect_customer');
+        if (collectCustomerRaw) {
+          const parsed = JSON.parse(collectCustomerRaw);
+          if (parsed && (parsed.cnic || parsed.fullName)) {
+            const customerObj: Customer = {
+              id: normalizeCnic(parsed.cnic || '') || `temp_${Date.now()}`,
+              cnic: formatCnic(parsed.cnic || ''),
+              fullName: parsed.fullName || parsed.customFields?.['Full Name'] || 'New Customer',
+              fatherName: parsed.fatherName || parsed.customFields?.['Father Name'] || '',
+              phone: parsed.phone || parsed.customFields?.['Phone'] || parsed.customFields?.['Mobile'] || '',
+              email: parsed.email || parsed.customFields?.['Email'] || '',
+              gender: parsed.gender || parsed.customFields?.['Gender'] || '',
+              dob: parsed.dob || parsed.customFields?.['Date of Birth'] || '',
+              address: parsed.address || parsed.customFields?.['Address'] || '',
+              city: parsed.city || parsed.customFields?.['City'] || '',
+              qualification: parsed.qualification || parsed.customFields?.['Qualification'] || '',
+              profession: parsed.profession || parsed.customFields?.['Profession'] || '',
+              experienceYears: parsed.experienceYears || '',
+              skills: parsed.skills || '',
+              bio: parsed.bio || '',
+              customFields: parsed.customFields || parsed.collectedFields || {},
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              syncedToSheet: false,
+            };
+            await handleCollectAndSaveCustomer(customerObj);
+            window.history.replaceState({}, '', window.location.pathname);
+          }
+        }
+
+        const harvestCnic = params.get('harvest_cnic');
+        const harvestFieldsRaw = params.get('harvest_fields');
+        if (harvestCnic && harvestFieldsRaw) {
+          const parsed = JSON.parse(harvestFieldsRaw);
+          if (parsed && Object.keys(parsed).length > 0) {
+            await handleSaveNewFieldsToCustomer(harvestCnic, parsed);
+            showToast(`✓ Received and saved ${Object.keys(parsed).length} new field(s) from external form under CNIC ${harvestCnic}!`, 'success');
+            // Clean URL query params without reloading
+            window.history.replaceState({}, '', window.location.pathname);
+          }
+        }
+      } catch (e) {
+        console.warn('URL harvest parse error:', e);
+      }
+
+      // 2. Check localStorage queue
       try {
         const raw = localStorage.getItem('syncsheet_web_harvest_queue');
         if (!raw) return;
@@ -507,7 +805,9 @@ export default function App() {
     };
 
     const handlePostMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'SYNCSHEET_NEW_FIELDS' && e.data.payload) {
+      if (e.data?.type === 'SYNCSHEET_COLLECT_CUSTOMER' && e.data.payload) {
+        handleCollectAndSaveCustomer(e.data.payload);
+      } else if (e.data?.type === 'SYNCSHEET_NEW_FIELDS' && e.data.payload) {
         const { cnic, newFields } = e.data.payload;
         if (cnic && newFields) {
           handleSaveNewFieldsToCustomer(cnic, newFields);
@@ -515,18 +815,39 @@ export default function App() {
       }
     };
 
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('syncsheet_channel');
+      bc.onmessage = (e) => {
+        if (e.data?.type === 'SYNCSHEET_COLLECT_CUSTOMER' && e.data.payload) {
+          handleCollectAndSaveCustomer(e.data.payload);
+        } else if (e.data?.type === 'SYNCSHEET_NEW_FIELDS' && e.data.payload) {
+          const { cnic, newFields } = e.data.payload;
+          if (cnic && newFields) {
+            handleSaveNewFieldsToCustomer(cnic, newFields);
+          }
+        }
+      };
+    } catch (e) {}
+
     window.addEventListener('focus', handleWindowFocus);
     window.addEventListener('message', handlePostMessage);
 
     return () => {
       window.removeEventListener('focus', handleWindowFocus);
       window.removeEventListener('message', handlePostMessage);
+      if (bc) {
+        bc.close();
+      }
     };
   }, [customers, accessToken, sheetConfig, isOnline]);
 
-  // Delete customer locally
+  // Delete customer locally and from cloud
   const handleDeleteCustomer = (cnic: string) => {
     deleteCustomerLocally(cnic);
+    if (user) {
+      deleteCustomerFromCloud(user.uid, cnic);
+    }
     const updated = getStoredCustomers();
     setCustomers(updated);
     showToast(`Customer record deleted locally for CNIC ${cnic}`, 'info');
@@ -628,6 +949,7 @@ export default function App() {
         onLogout={handleGoogleLogout}
         onSyncNow={() => triggerSync()}
         onOpenSheetModal={() => setIsSheetModalOpen(true)}
+        onOpenCVUpload={() => setIsCVUploadModalOpen(true)}
       />
 
       {/* Floating Status Notification Toast */}
@@ -717,12 +1039,28 @@ export default function App() {
             Entry Form
           </button>
           <button
+            onClick={() => setActiveTab('mobile-police')}
+            className={`flex-1 min-w-[110px] py-2 rounded-lg text-center font-medium ${
+              activeTab === 'mobile-police' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600'
+            }`}
+          >
+            🛡️ Police Sahulat
+          </button>
+          <button
             onClick={() => setActiveTab('autofill')}
             className={`flex-1 min-w-[90px] py-2 rounded-lg text-center ${
               activeTab === 'autofill' ? 'bg-slate-900 text-white' : 'text-slate-600'
             }`}
           >
             AutoFiller ⚡
+          </button>
+          <button
+            onClick={() => setActiveTab('jobs')}
+            className={`flex-1 min-w-[90px] py-2 rounded-lg text-center ${
+              activeTab === 'jobs' ? 'bg-slate-900 text-white' : 'text-slate-600'
+            }`}
+          >
+            Jobs 🇵🇰
           </button>
           <button
             onClick={() => setActiveTab('customers')}
@@ -758,6 +1096,7 @@ export default function App() {
               allCustomers={customers}
               onPreviewAndSubmit={handleFormPreviewSubmit}
               onQuickCV={(cust) => handleOpenCVModal(cust)}
+              onOpenCVUpload={() => setIsCVUploadModalOpen(true)}
               isOnline={isOnline}
               hasGoogleSheet={Boolean(sheetConfig)}
             />
@@ -786,7 +1125,10 @@ export default function App() {
                   setIsPreviewUpdate(true);
                   setIsPreviewModalOpen(true);
                 }}
+                onOpenCVUpload={() => setIsCVUploadModalOpen(true)}
                 sheetUrl={sheetConfig?.url}
+                onTriggerSync={() => triggerSync()}
+                isSyncing={isSyncing}
               />
             </div>
           </div>
@@ -806,6 +1148,13 @@ export default function App() {
               </div>
 
               <div className="flex items-center space-x-2 shrink-0">
+                <button
+                  onClick={() => setIsCVUploadModalOpen(true)}
+                  className="flex items-center space-x-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Import from CV (AI)</span>
+                </button>
                 <button
                   onClick={handleExportCsv}
                   className="flex items-center space-x-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold transition-colors"
@@ -836,7 +1185,10 @@ export default function App() {
                 setIsPreviewUpdate(true);
                 setIsPreviewModalOpen(true);
               }}
+              onOpenCVUpload={() => setIsCVUploadModalOpen(true)}
               sheetUrl={sheetConfig?.url}
+              onTriggerSync={() => triggerSync()}
+              isSyncing={isSyncing}
             />
           </div>
         )}
@@ -936,17 +1288,53 @@ export default function App() {
           </div>
         )}
 
-        {/* Tab 5: Universal Form AutoFiller & Web Field Collector */}
-        {activeTab === 'autofill' && (
+        {/* Tab 5 & 6: Universal Form AutoFiller & Police Sahulat Mobile Hub */}
+        {(activeTab === 'autofill' || activeTab === 'mobile-police') && (
           <AutofillHub
             customers={customers}
             sheetConfig={sheetConfig}
             onSaveNewFieldsToCustomer={handleSaveNewFieldsToCustomer}
+            onCollectAndSaveCustomer={handleCollectAndSaveCustomer}
+            onRefreshSheet={() => handlePullFromSheet()}
+            userEmail={user?.email || 'rashidshewa9@gmail.com'}
             isOnline={isOnline}
             isSignedIn={Boolean(user)}
+            initialSubTab={activeTab === 'mobile-police' ? 'mobile-police' : undefined}
+            onOpenCVUpload={() => setIsCVUploadModalOpen(true)}
+            onSearchJobs={(c) => {
+              setJobCandidate(c || null);
+              setActiveTab('jobs');
+            }}
+          />
+        )}
+
+        {/* Tab 7: Pakistan Jobs Finder (Govt & Private with Google Search Grounding) */}
+        {activeTab === 'jobs' && (
+          <JobsSearchHub
+            customers={customers}
+            selectedCustomer={jobCandidate}
+            onSelectCustomer={(c) => setJobCandidate(c)}
+            onOpenAutofillForJob={handleOpenAutofillForJob}
+            onOpenCVUpload={() => setIsCVUploadModalOpen(true)}
           />
         )}
       </main>
+
+      {/* AI CV Upload & Data Collector Modal */}
+      <CVUploadModal
+        isOpen={isCVUploadModalOpen}
+        onClose={() => setIsCVUploadModalOpen(false)}
+        allCustomers={customers}
+        onSaveCustomer={handleSaveExtractedCustomer}
+        onSelectForAutofill={(c) => {
+          setCustomerToEdit(c);
+          setActiveTab('autofill');
+        }}
+        onSearchJobsForCandidate={(c) => {
+          setJobCandidate(c);
+          setActiveTab('jobs');
+        }}
+      />
 
       {/* Review Information Before Finalizing Modal */}
       <CustomerPreviewModal
@@ -1043,6 +1431,17 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Persistent Floating AutoFill Button across devices */}
+      <FloatingAutofillButton
+        customers={customers}
+        sheetConfig={sheetConfig}
+        onSelectCustomerToEdit={handleSelectCustomerToEdit}
+        onSaveNewFields={handleSaveNewFieldsToCustomer}
+        onCollectAndSaveCustomer={handleCollectAndSaveCustomer}
+        isOnline={isOnline}
+        userEmail={user?.email || 'rashidshewa9@gmail.com'}
+      />
     </div>
   );
 }

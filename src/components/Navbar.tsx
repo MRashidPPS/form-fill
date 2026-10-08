@@ -17,6 +17,9 @@ import {
   X,
   CheckCircle2,
   Zap,
+  Shield,
+  Briefcase,
+  Sparkles,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -33,6 +36,7 @@ interface NavbarProps {
   onLogout: () => void;
   onSyncNow: () => void;
   onOpenSheetModal: () => void;
+  onOpenCVUpload?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -49,11 +53,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   onLogout,
   onSyncNow,
   onOpenSheetModal,
+  onOpenCVUpload,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
 
   const navItems = [
     { id: 'form', label: 'CNIC Entry & Form', icon: PlusCircle },
+    { id: 'jobs', label: 'Pakistan Jobs (Govt/Pvt)', icon: Briefcase },
+    { id: 'mobile-police', label: 'Police Sahulat & Mobile Sync', icon: Shield },
     { id: 'autofill', label: 'Universal AutoFiller', icon: Zap },
     { id: 'customers', label: 'Customer Directory', icon: Users },
     { id: 'cv-maker', label: 'CV Builder & PDF', icon: FileText },
@@ -131,6 +138,30 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </>
               )}
             </div>
+
+            {/* Quick Upload CV Trigger Button */}
+            {onOpenCVUpload && (
+              <button
+                onClick={onOpenCVUpload}
+                className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-linear-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white shadow-xs transition-all cursor-pointer"
+                title="Upload CV & Collect Data with Gemini AI"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-200" />
+                <span className="hidden sm:inline">Upload CV (AI)</span>
+              </button>
+            )}
+
+            {/* Quick Floating AutoFill Trigger Button */}
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('toggle_floating_autofill'));
+              }}
+              className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 transition-colors cursor-pointer"
+              title="Activate / Open Floating AutoFill Button across your devices"
+            >
+              <Zap className="w-3.5 h-3.5 text-emerald-600 fill-emerald-600 animate-pulse" />
+              <span className="hidden sm:inline">Floating AutoFill</span>
+            </button>
 
             {/* Sync Queue / Sync Now button */}
             {pendingQueueCount > 0 ? (

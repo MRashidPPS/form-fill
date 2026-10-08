@@ -2,27 +2,55 @@
   "entities": {
     "customer": {
       "title": "Customer",
-      "description": "Customer registry record indexed by CNIC",
+      "description": "Customer registry record indexed by CNIC, synced across user devices",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
         "cnic": { "type": "string" },
         "fullName": { "type": "string" },
+        "fatherName": { "type": "string" },
         "phone": { "type": "string" },
         "email": { "type": "string" },
+        "gender": { "type": "string" },
+        "dob": { "type": "string" },
+        "address": { "type": "string" },
         "city": { "type": "string" },
         "qualification": { "type": "string" },
         "profession": { "type": "string" },
+        "experienceYears": { "type": "string" },
+        "skills": { "type": "string" },
+        "bio": { "type": "string" },
+        "customFields": { "type": "object" },
         "createdAt": { "type": "string" },
-        "updatedAt": { "type": "string" }
+        "updatedAt": { "type": "string" },
+        "syncedToSheet": { "type": "boolean" },
+        "sheetRowIndex": { "type": "number" }
       },
-      "required": ["cnic", "fullName"]
+      "required": ["cnic", "fullName", "userId"]
+    },
+    "userConfig": {
+      "title": "User Config",
+      "description": "User connected Google Sheet metadata and settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "sheetName": { "type": "string" },
+        "url": { "type": "string" },
+        "lastSyncedAt": { "type": "string" }
+      }
     }
   },
   "firestore": {
-    "/customers/{customerId}": {
+    "/users/{userId}/customers/{customerId}": {
       "schema": "customer",
-      "description": "Collection of customer records"
+      "description": "Customer records for a specific user"
+    },
+    "/users/{userId}/config/sheet": {
+      "schema": "userConfig",
+      "description": "Google Sheet configuration for a specific user"
     }
   }
 }
